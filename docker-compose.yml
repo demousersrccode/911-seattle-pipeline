@@ -1,0 +1,145 @@
+version: '3.7'
+services:
+    postgres:                                           # create postgres container
+        image: postgres:9.6
+        container_name: postgres_container
+        environment:
+            - POSTGRES_USER=airflow
+            - POSTGRES_PASSWORD=airflow
+            - POSTGRES_DB=airflow
+        networks: 
+            seattle:
+                ipv4_address: "10.0.100.10"
+
+    airflow:                                # create airflow container
+        build: './airflow_docker'           # construct the container along the Dockerfile in this folder
+        container_name: airflow_container
+        restart: always
+        depends_on:
+            - postgres
+        environment:
+            - LOAD_EX=n
+            - EXECUTOR=Local
+        volumes:                                        # mount the following local folders
+            - ./dags:/usr/local/airflow/dags
+        ports:
+            - "8080:8080"                               # expose port
+        command: webserver
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+        networks: 
+            seattle:
+                ipv4_address: "10.0.100.80"
+
+    zookeeper:
+        image: confluentinc/cp-zookeeper:5.4.0
+        hostname: zookeeper
+        container_name: zookeeper
+        ports:
+            - "2181:2181"                               # expose port
+        environment:
+            ZOOKEEPER_CLIENT_PORT: 2181
+            ZOOKEEPER_TICK_TIME: 2000
+        networks: 
+            seattle:
+                ipv4_address: "10.0.100.21"
+
+    broker:
+        image: confluentinc/cp-server:5.4.0
+        hostname: broker
+        container_name: broker
+        depends_on:
+            - zookeeper
+        ports:
+            - "9092:9092"
+        environment:
+            KAFKA_BROKER_ID: 1
+            KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://10.0.100.90:29092,PLAINTEXT_HOST://localhost:9092
+            KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+            KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+            KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+            KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+            CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: 10.0.100.90:29092
+            CONFLUENT_METRICS_REPORTER_ZOOKEEPER_CONNECT: zookeeper:2181
+            CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+            CONFLUENT_METRICS_ENABLE: 'true'
+            CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+        networks: 
+            seattle:
+                ipv4_address: "10.0.100.90"
+
+    kafka-tools:
+        image: confluentinc/cp-kafka:5.4.0
+        hostname: kafka
+        container_name: kafka
+        command: ["tail", "-f", "/dev/null"]
+        network_mode: "host"
+
+    elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:7.7.0
+        container_name: elasticsearch_container
+        restart: unless-stopped
+        environment:
+            - cluster.name=docker-cluster
+            - discovery.type=single-node
+            - bootstrap.memory_lock=true
+            - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+            - network.bind_host=0.0.0.0
+        ulimits:
+            memlock:
+                soft: -1
+                hard: -1
+        volumes:
+            - esdata:/usr/share/elasticsearch/data
+        ports:
+            - 9200:9200
+        expose:
+            - "9200"
+        networks: 
+            seattle:
+                ipv4_address: "10.0.100.92"
+ 
+    kibana:
+        image: docker.elastic.co/kibana/kibana:7.6.2
+        container_name: kibana_container
+        hostname: kibana
+        restart: unless-stopped
+        depends_on:
+            - elasticsearch
+        environment:
+            - SERVER_NAME=kibana.localhost
+            - ELASTICSEARCH_URL=http://10.0.100.92:9200
+            - ELASTICSEARCH_HOST=http://10.0.100.92:9200
+            - MONITORING_ENABLED=false
+        ports:
+            - 5601:5601
+        expose:
+            - "5601"
+        links:
+            - elasticsearch
+        depends_on:
+            - elasticsearch
+        volumes:
+            - kibanadata:/usr/share/kibana/data
+        networks:
+            seattle:
+                ipv4_address: "10.0.100.56"
+
+
+volumes:
+    esdata:
+        driver: local
+    kibanadata:
+        driver: local
+
+networks: 
+  seattle:
+    ipam: 
+      driver: default
+      config: 
+        - subnet: 10.0.100.0/24
